@@ -502,9 +502,18 @@ class EXP(NeuralNetwork):
         init.xavier_normal_(self.alignfc_g.weight)
         init.xavier_normal_(self.alignfc_t.weight)
 
+    def bert_whitening(self, vecs):
+        # https://kexue.fm/archives/8069
+        mu = vecs.mean(axis = 0, keepdims = True)
+        cov = np.cov(vecs.T)
+        u, s, vh = np.linalg.svd(cov)
+        W = np.dot(u, np.diag(1 / np.sqrt(s)))
+        return W, -mu
+
     def calculate_cos_matrix(self): # 根据所有节点的嵌入特征计算矩阵保存任意两个节点之间的余弦相似度
-        
-        a,b = torch.from_numpy(config['node_embedding']),torch.from_numpy(config['node_embedding'].T)
+        kernel, bias = self.bert_whitening(config['node_embedding'])
+        whitened_embeddings = np.dot(config['node_embedding'] + bias, kernel)
+        a,b = torch.from_numpy(whitened_embeddings),torch.from_numpy(whitened_embeddings.T)
         c = torch.mm(a, b)
         aa = torch.mul(a, a)
         bb = torch.mul(b, b)

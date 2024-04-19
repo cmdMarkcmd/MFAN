@@ -57,11 +57,23 @@ def data_process():
         mid2index[newid2mid[id]]= newid2index[id] = num2index[newid2num[id]]
    
     
-    mid2comment={}#mid也可对应的评论
+    #mid2comment={}
+    mid2commentid={}#mid也可对应的评论
+    comment_list=[]
+    comment_cnt = 0
     with open(pre+'/comment_content.json','r',encoding = 'utf-8') as f:
         id_comment_map = json.load(f)
         for mid,text in id_comment_map.items():#mid和对应的评论
-            mid2comment[mid] = remove_links(text)#去掉评论中的连接
+            nolinks_text = remove_links(text)#去掉评论中的连接
+            #mid2comment[mid] = nolinks_text
+            mid2commentid[mid] = comment_cnt
+            comment_cnt += 1
+            comment_list.append(nolinks_text)
+
+    comment, comment_1, comment_2, comment_3\
+        = bert_process_part(comment_list) #一次性处理完比一个一个处理快的多
+    gc.collect()#garbage collector
+    torch.cuda.empty_cache()
 
     uid2mids={} #每个用户uid对应的微博mid list
     with open(pre+'/user_tweet.json','r',encoding='utf-8') as f:
@@ -85,12 +97,16 @@ def data_process():
                            ,dim=0
                            ,keepdim=False)
         
-        elif id in mid2comment:#如果id是comment_mid，处理后嵌入
-            comment_text = mid2comment[id]
-            comment,comment_1,comment_2,comment_3=\
-                bert_process_part([comment_text])
+        elif id in mid2commentid:#如果id是comment_mid，处理后嵌入
+            #comment_text = mid2comment[id]
+            comment_id = mid2commentid[id]
+            # comment,comment_1,comment_2,comment_3=\
+            #     bert_process_part([comment_text])
             node_embedding_matrix[i,:]=torch.mean(
-                  torch.cat((comment,comment_1,comment_2,comment_3)
+                  torch.cat((comment[comment_id],
+                             comment_1[comment_id],
+                             comment_2[comment_id],
+                             comment_3[comment_id])
                            ,dim=0)
                            ,dim=0
                            ,keepdim=False)
@@ -118,7 +134,7 @@ def data_process():
     if os.path.exists(save_path):
         os.remove(save_path)
     pickle.dump([node_embedding_matrix],
-                open(save_path, 'wb'))
+                open(save_path, 'wb')) #将所有节点的嵌入保存在node_embedding.pkl
     
 
     print('data_process: Done')
@@ -143,10 +159,13 @@ def bert_process_part(text_list):
     layers_2 = []
     layers_3 = []
     num = 0
+    batch_size = 50
+    print("total batches: {}".format(length / batch_size))
     #这样处理之后在文本训练相关模型中，不需要x_train等，只留一个X_train_tid即可
-    for i in range(int(length/10)):#0-19分批次处理，防止显存爆炸
+    for i in range(int(length / batch_size)):#0-19分批次处理，防止显存爆炸
+        print("processing text batch: {}".format(i))
         num+=1
-        batch_lines=lines[i*10:(i+1)*10]#截取100行作为1batch
+        batch_lines=lines[i * batch_size : (i+1) * batch_size]#截取50行作为1batch
         input_ids=torch.tensor(batch_lines,dtype = torch.long).cuda()
         mask = torch.where(input_ids!=0,torch.ones_like(input_ids),torch.zeros_like(input_ids)).cuda()
         this_put = bert_modal(input_ids,attention_mask=mask)[0].detach().cpu()
@@ -167,8 +186,8 @@ def bert_process_part(text_list):
         layers_3.append(hidden_layer_3)
         gc.collect()
         torch.cuda.empty_cache()
-
-    batch_lines=lines[num*20:]
+    print("====this part end====")
+    batch_lines=lines[num * batch_size:]
     input_ids=torch.tensor(batch_lines,dtype = torch.long).cuda()
     mask = torch.where(input_ids!=0,torch.ones_like(input_ids),torch.zeros_like(input_ids))
     this_put = bert_modal(input_ids,attention_mask=mask)[0].detach().cpu()
